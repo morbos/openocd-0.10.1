@@ -36,7 +36,7 @@
  * arm-none-eabi-objdump -o stm32l5x.o
  *
  * To generate binary file:
- * arm-none-eabi-objcopy -O binary stm32l5x.o stm32l4_flash_write_code.bin
+ * arm-none-eabi-objcopy -O binary stm32l5x.o stm32l5_flash_write_code.bin
  *
  * To generate include file:
  * xxd -i stm32l5_flash_write_code.bin
@@ -56,8 +56,8 @@
  * r8   - wp, tmp
  */
 
-#define STM32_FLASH_CR_OFFSET	0x2C	/* offset of CR register in FLASH struct */
-#define STM32_FLASH_SR_OFFSET	0x24	/* offset of SR register in FLASH struct */
+#define STM32_FLASH_CR_OFFSET	0x28	/* offset of CR register in FLASH struct */
+#define STM32_FLASH_SR_OFFSET	0x20	/* offset of SR register in FLASH struct */
 
 wait_fifo:
 	ldr 	r8, [r0, #0]	/* read wp */

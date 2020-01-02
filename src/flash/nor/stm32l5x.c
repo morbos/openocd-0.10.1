@@ -23,7 +23,7 @@
 #include "imp.h"
 #include <helper/binarybuffer.h>
 #include <target/algorithm.h>
-#include <target/armv7m.h>
+#include <target/armv8m.h>
 
 /* STM32L5xxx series for reference.
  *
@@ -45,17 +45,22 @@
 
 #define FLASH_ERASE_TIMEOUT 250
 
-#define STM32_FLASH_BASE    0x50022000
-#define STM32_FLASH_ACR     0x50022000
-#define STM32_FLASH_KEYR    0x5002200c
-#define STM32_FLASH_OPTKEYR 0x50022010
-#define STM32_FLASH_SR      0x50022024
-#define STM32_FLASH_CR      0x5002202c
-#define STM32_FLASH_OPTR    0x50022040
-#define STM32_FLASH_WRP1AR  0x50022058
-#define STM32_FLASH_WRP2AR  0x50022068
-#define STM32_FLASH_WRP1BR  0x5002205c
-#define STM32_FLASH_WRP2BR  0x5002206c
+#define STM32_FLASH_BASE     0x50022000
+#define STM32_FLASH_ACR      0x50022000
+#define STM32_FLASH_NSKEYR   0x50022008
+#define STM32_FLASH_SECKEYR  0x5002200c
+#define STM32_FLASH_OPTKEYR  0x50022010
+#define STM32_FLASH_NSSR     0x50022020
+#define STM32_FLASH_SECSR    0x50022024
+#define STM32_FLASH_NSCR     0x50022028
+#define STM32_FLASH_SECCR    0x5002202c
+#define STM32_FLASH_OPTR     0x50022040
+#define STM32_FLASH_SECWM1R1 0x50022050
+#define STM32_FLASH_WRP1AR   0x50022058
+#define STM32_FLASH_SECWM2R1 0x50022060
+#define STM32_FLASH_WRP2AR   0x50022068
+#define STM32_FLASH_WRP1BR   0x5002205c
+#define STM32_FLASH_WRP2BR   0x5002206c
 
 /* FLASH_CR register bits */
 
@@ -151,7 +156,7 @@ static inline int stm32l5_get_flash_status(struct flash_bank *bank, uint32_t *st
 {
 	struct target *target = bank->target;
 	return target_read_u32(
-		target, stm32l5_get_flash_reg(bank, STM32_FLASH_SR), status);
+		target, stm32l5_get_flash_reg(bank, STM32_FLASH_NSSR), status);
 }
 
 static int stm32l5_wait_status_busy(struct flash_bank *bank, int timeout)
@@ -186,7 +191,7 @@ static int stm32l5_wait_status_busy(struct flash_bank *bank, int timeout)
 		/* If this operation fails, we ignore it and report the original
 		 * retval
 		 */
-		target_write_u32(target, stm32l5_get_flash_reg(bank, STM32_FLASH_SR),
+		target_write_u32(target, stm32l5_get_flash_reg(bank, STM32_FLASH_NSSR),
 				status & FLASH_ERROR);
 	}
 	return retval;
@@ -199,7 +204,7 @@ static int stm32l5_unlock_reg(struct target *target)
 	/* first check if not already unlocked
 	 * otherwise writing on STM32_FLASH_KEYR will fail
 	 */
-	int retval = target_read_u32(target, STM32_FLASH_CR, &ctrl);
+	int retval = target_read_u32(target, STM32_FLASH_NSCR, &ctrl);
 	if (retval != ERROR_OK)
 		return retval;
 
@@ -207,20 +212,20 @@ static int stm32l5_unlock_reg(struct target *target)
 		return ERROR_OK;
 
 	/* unlock flash registers */
-	retval = target_write_u32(target, STM32_FLASH_KEYR, KEY1);
+	retval = target_write_u32(target, STM32_FLASH_NSKEYR, KEY1);
 	if (retval != ERROR_OK)
 		return retval;
 
-	retval = target_write_u32(target, STM32_FLASH_KEYR, KEY2);
+	retval = target_write_u32(target, STM32_FLASH_NSKEYR, KEY2);
 	if (retval != ERROR_OK)
 		return retval;
 
-	retval = target_read_u32(target, STM32_FLASH_CR, &ctrl);
+	retval = target_read_u32(target, STM32_FLASH_NSCR, &ctrl);
 	if (retval != ERROR_OK)
 		return retval;
 
 	if (ctrl & FLASH_LOCK) {
-		LOG_ERROR("flash not unlocked STM32_FLASH_CR: %" PRIx32, ctrl);
+		LOG_ERROR("flash not unlocked STM32_FLASH_NSCR: %" PRIx32, ctrl);
 		return ERROR_TARGET_FAILURE;
 	}
 
@@ -231,7 +236,7 @@ static int stm32l5_unlock_option_reg(struct target *target)
 {
 	uint32_t ctrl;
 
-	int retval = target_read_u32(target, STM32_FLASH_CR, &ctrl);
+	int retval = target_read_u32(target, STM32_FLASH_NSCR, &ctrl);
 	if (retval != ERROR_OK)
 		return retval;
 
@@ -247,12 +252,12 @@ static int stm32l5_unlock_option_reg(struct target *target)
 	if (retval != ERROR_OK)
 		return retval;
 
-	retval = target_read_u32(target, STM32_FLASH_CR, &ctrl);
+	retval = target_read_u32(target, STM32_FLASH_NSCR, &ctrl);
 	if (retval != ERROR_OK)
 		return retval;
 
 	if (ctrl & FLASH_OPTLOCK) {
-		LOG_ERROR("options not unlocked STM32_FLASH_CR: %" PRIx32, ctrl);
+		LOG_ERROR("options not unlocked STM32_FLASH_NSCR: %" PRIx32, ctrl);
 		return ERROR_TARGET_FAILURE;
 	}
 
@@ -362,7 +367,6 @@ static int stm32l5_erase(struct flash_bank *bank, int first, int last)
 {
 	struct target *target = bank->target;
 	int i;
-
 	assert(first < bank->num_sectors);
 	assert(last < bank->num_sectors);
 
@@ -388,10 +392,23 @@ static int stm32l5_erase(struct flash_bank *bank, int first, int last)
 	 */
 	struct stm32l5_flash_bank *stm32l5_info = bank->driver_priv;
 
+	// vvvv vvv vvv
+	// We want to temporarily (this reset) lift the sec watermark to place it
+	// at the end of the flash. If you use a split flash where some is s/ns, then the erase
+	// will fail when it gets just past the watermark.
+	// There are still a myriad of options not considered here... dual bank, future proofing etc
+	stm32l5_unlock_option_reg(target);
+	retval = target_write_u32(target, STM32_FLASH_SECWM1R1, 0xffffff80); // All secure... till next reset
+	if (retval != ERROR_OK)
+	  return retval;
+	retval = target_write_u32(target, STM32_FLASH_SECWM2R1, 0xffffff80); // All secure... till next reset
+	if (retval != ERROR_OK)
+	  return retval;
+	// ^^^^ ^^^ ^^
+	
 	for (i = first; i <= last; i++) {
 		uint32_t erase_flags;
 		erase_flags = FLASH_PER | FLASH_STRT;
-
 		if  (i >= stm32l5_info->option_bytes.bank_b_start) {
 			uint8_t snb;
 			snb = (i - stm32l5_info->option_bytes.bank_b_start) + 256;
@@ -399,7 +416,7 @@ static int stm32l5_erase(struct flash_bank *bank, int first, int last)
 		} else
 			erase_flags |= i << FLASH_PAGE_SHIFT;
 		retval = target_write_u32(target,
-				stm32l5_get_flash_reg(bank, STM32_FLASH_CR), erase_flags);
+				stm32l5_get_flash_reg(bank, STM32_FLASH_NSCR), erase_flags);
 		if (retval != ERROR_OK)
 			return retval;
 
@@ -411,7 +428,7 @@ static int stm32l5_erase(struct flash_bank *bank, int first, int last)
 	}
 
 	retval = target_write_u32(
-		target, stm32l5_get_flash_reg(bank, STM32_FLASH_CR), FLASH_LOCK);
+		target, stm32l5_get_flash_reg(bank, STM32_FLASH_NSCR), FLASH_LOCK);
 	if (retval != ERROR_OK)
 		return retval;
 
@@ -454,7 +471,7 @@ static int stm32l5_write_block(struct flash_bank *bank, const uint8_t *buffer,
 	struct working_area *source;
 	uint32_t address = bank->base + offset;
 	struct reg_param reg_params[5];
-	struct armv7m_algorithm armv7m_info;
+	struct armv8m_algorithm armv8m_info;
 	int retval = ERROR_OK;
 
 	/* See contrib/loaders/flash/stm32l5x.S for source and
@@ -464,14 +481,14 @@ static int stm32l5_write_block(struct flash_bank *bank, const uint8_t *buffer,
 	static const uint8_t stm32l5_flash_write_code[] = {
 	  0xd0, 0xf8, 0x00, 0x80, 0xb8, 0xf1, 0x00, 0x0f, 0x21, 0xd0, 0x45, 0x68,
 	  0xb8, 0xeb, 0x05, 0x06, 0x44, 0xbf, 0x76, 0x18, 0x36, 0x1a, 0x08, 0x2e,
-	  0xf2, 0xd3, 0xdf, 0xf8, 0x36, 0x60, 0xe6, 0x62, 0xf5, 0xe8, 0x02, 0x67,
-	  0xe2, 0xe8, 0x02, 0x67, 0xbf, 0xf3, 0x4f, 0x8f, 0x66, 0x6a, 0x16, 0xf4,
+	  0xf2, 0xd3, 0xdf, 0xf8, 0x36, 0x60, 0xa6, 0x62, 0xf5, 0xe8, 0x02, 0x67,
+	  0xe2, 0xe8, 0x02, 0x67, 0xbf, 0xf3, 0x4f, 0x8f, 0x26, 0x6a, 0x16, 0xf4,
 	  0x80, 0x3f, 0xfb, 0xd1, 0x16, 0xf0, 0xfa, 0x0f, 0x07, 0xd1, 0x8d, 0x42,
 	  0x28, 0xbf, 0x00, 0xf1, 0x08, 0x05, 0x45, 0x60, 0x01, 0x3b, 0x13, 0xb1,
 	  0xda, 0xe7, 0x00, 0x21, 0x41, 0x60, 0x30, 0x46, 0x00, 0xbe, 0x01, 0x00,
 	  0x00, 0x00
 	};
-
+	
 	if (target_alloc_working_area(target, sizeof(stm32l5_flash_write_code),
 			&write_algorithm) != ERROR_OK) {
 		LOG_WARNING("no working area available, can't do block memory writes");
@@ -498,8 +515,8 @@ static int stm32l5_write_block(struct flash_bank *bank, const uint8_t *buffer,
 		}
 	}
 
-	armv7m_info.common_magic = ARMV7M_COMMON_MAGIC;
-	armv7m_info.core_mode = ARM_MODE_THREAD;
+	armv8m_info.common_magic = ARMV8M_COMMON_MAGIC;
+	armv8m_info.core_mode = ARM_MODE_THREAD;
 
 	init_reg_param(&reg_params[0], "r0", 32, PARAM_IN_OUT);	/* buffer start, status (out) */
 	init_reg_param(&reg_params[1], "r1", 32, PARAM_OUT);	/* buffer end */
@@ -518,7 +535,7 @@ static int stm32l5_write_block(struct flash_bank *bank, const uint8_t *buffer,
 			5, reg_params,
 			source->address, source->size,
 			write_algorithm->address, 0,
-			&armv7m_info);
+			&armv8m_info);
 
 	if (retval == ERROR_FLASH_OPERATION_FAILED) {
 		LOG_ERROR("error executing stm32l5 flash write algorithm");
@@ -531,7 +548,7 @@ static int stm32l5_write_block(struct flash_bank *bank, const uint8_t *buffer,
 		if (error != 0) {
 			LOG_ERROR("flash write failed = %08" PRIx32, error);
 			/* Clear but report errors */
-			target_write_u32(target, STM32_FLASH_SR, error);
+			target_write_u32(target, STM32_FLASH_NSSR, error);
 			retval = ERROR_FAIL;
 		}
 	}
@@ -590,7 +607,7 @@ static int stm32l5_write(struct flash_bank *bank, const uint8_t *buffer,
 		}
 
 	LOG_WARNING("block write succeeded");
-	return target_write_u32(target, STM32_FLASH_CR, FLASH_LOCK);
+	return target_write_u32(target, STM32_FLASH_NSCR, FLASH_LOCK);
 }
 
 static int stm32l5_probe(struct flash_bank *bank)
@@ -604,10 +621,31 @@ static int stm32l5_probe(struct flash_bank *bank)
 	uint32_t options;
 	uint32_t base_address = 0x08000000;
 
+	/* 
+	 * Write SAU_CTRL ALLNS=1 (i.e. use default TZ memory map)
+	 * w/o that write... any probe of the internal data regs will return 0.
+	 * this is safe since if a user locks the part down, jtag/swd won't conn
+	 * anyway.
+	 */
+	int retval = target_write_u32(target, 0xe000edd0, 2);
+	if (retval != ERROR_OK)
+		return retval;
+
+	// vvvv STM32L5 TZ magical test vvvvv
+	// We have the same flash mapped at 2 spots.
+	// S  @0x0c00_0000
+	// NS @0x0800_0000
+	// Via the target cfg, we define base addrs for both.
+	// If we see it != 0, then we override since the .cfg is master.
+	// In this way, GDB sees 2 flash banks.
+	if(bank->base != 0) {
+	  base_address = bank->base;
+	}
+	   
 	stm32l5_info->probed = 0;
 
 	/* read stm32 device id register */
-	int retval = target_read_u32(target, DBGMCU_IDCODE, &device_id);
+	retval = target_read_u32(target, DBGMCU_IDCODE, &device_id);
 	if (retval != ERROR_OK)
 		return retval;
 	LOG_INFO("device id = 0x%08" PRIx32 "", device_id);
@@ -692,7 +730,7 @@ static int get_stm32l5_info(struct flash_bank *bank, char *buf, int buf_size)
 {
 	struct target *target = bank->target;
 	uint32_t dbgmcu_idcode;
-
+	
 	/* read stm32 device id register */
 	int retval = target_read_u32(target, DBGMCU_IDCODE, &dbgmcu_idcode);
 	if (retval != ERROR_OK)
@@ -840,11 +878,11 @@ static int stm32l5_mass_erase(struct flash_bank *bank, uint32_t action)
 
 	/* mass erase flash memory */
 	retval = target_write_u32(
-		target, stm32l5_get_flash_reg(bank, STM32_FLASH_CR), action);
+		target, stm32l5_get_flash_reg(bank, STM32_FLASH_NSCR), action);
 	if (retval != ERROR_OK)
 		return retval;
 	retval = target_write_u32(
-		target, stm32l5_get_flash_reg(bank, STM32_FLASH_CR),
+		target, stm32l5_get_flash_reg(bank, STM32_FLASH_NSCR),
 		action | FLASH_STRT);
 	if (retval != ERROR_OK)
 		return retval;
@@ -854,7 +892,7 @@ static int stm32l5_mass_erase(struct flash_bank *bank, uint32_t action)
 		return retval;
 
 	retval = target_write_u32(
-		target, stm32l5_get_flash_reg(bank, STM32_FLASH_CR), FLASH_LOCK);
+		target, stm32l5_get_flash_reg(bank, STM32_FLASH_NSCR), FLASH_LOCK);
 	if (retval != ERROR_OK)
 		return retval;
 
